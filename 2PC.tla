@@ -1,5 +1,5 @@
 -------------------------------- MODULE 2PC --------------------------------
-EXTENDS FiniteSets, TLAPS
+EXTENDS TLAPS
 
 CONSTANTS RM, RMState, TMState, Msgs
 
@@ -70,13 +70,25 @@ RMChooseToAbort(rm) ==
     /\ /\rmState' = [rmState EXCEPT ![rm] = "aborted"]
     /\ UNCHANGED <<tmState, tmPrepared, msgs>>
 
-RMRcvCommitMsg(rm) ==
+ExistAbortMsg ==
+    /\ [type |-> "abort"] \in msgs
+
+ExistCommitMsg ==
     /\ [type |-> "commit"] \in msgs
+
+NoAbortMsg ==
+    /\ [type |-> "abort"] \notin msgs
+
+NoCommitMsg ==
+    /\ [type |-> "commit"] \notin msgs
+
+RMRcvCommitMsg(rm) ==
+    /\ ExistCommitMsg
     /\ rmState' = [rmState EXCEPT ![rm] = "committed"]
     /\ UNCHANGED <<tmState, tmPrepared, msgs>>
 
 RMRcvAbortMsg(rm) ==
-    /\ [type |-> "abort"] \in msgs
+    /\ ExistAbortMsg
     /\ rmState' = [rmState EXCEPT ![rm] = "aborted"]
     /\ UNCHANGED <<tmState, tmPrepared, msgs>>
 
@@ -98,7 +110,29 @@ Next ==
 
 Spec == Init /\ [][Next]_vars
 
-THEOREM Spec => []TypeInvariant
+ExistCommittedRM ==
+    /\ \E rm \in RM: rmState[rm] = "committed"
+
+NoAbortedRM ==
+    /\ \A rm \in RM: rmState[rm] # "aborted"
+
+ExistAbortedRM ==
+    /\ \E rm \in RM: rmState[rm] = "aborted"
+
+NoCommittedRM ==
+    /\ \A rm \in RM: rmState[rm] # "committed"
+
+Consistency ==
+    /\ ExistCommittedRM => NoAbortedRM
+    /\ ExistAbortedRM => NoCommittedRM
+
+\* (~ \E rm \in RM: rmState[rm] = "committed") \/ \A rm \in RM: rmState[rm] # "aborted"
+\* \A rm \in RM: rmState[rm] # "committed" \/ \A rm \in RM: rmState[rm] # "aborted"
+\* case RMChooseToAbort: prove no prep msg
+\* case RMRcvCommitMsg: prove has cmt msg => no abort rm
+\* case RMRcvAbortMsg: prove has abt msg => no cmt rm
+
+THEOREM TypeProperty == Spec => []TypeInvariant
 <1> SUFFICES ASSUME Init /\ [][Next]_vars PROVE []TypeInvariant BY DEF Spec
 <1>1 Init => TypeInvariant
   <2> SUFFICES ASSUME Init PROVE TypeInvariant OBVIOUS
@@ -271,7 +305,91 @@ THEOREM Spec => []TypeInvariant
   <2> QED BY <2>1, <2>2, <2>3
 <1> QED BY <1>1, <1>2, PTL
 
+
+\* RMChooseToAbort(rm) -> NoAbortedRM' \/ NoCommittedRM'
+\* RMChooseToAbort(rm) -> NoCommittedRM'
+\* RMChooseToAbort(rm) -> ExistUnpreparedRM -> Yet
+
+\* RMRcvAbortMsg(rm) -> NoAbortedRM \/ NoCommittedRM
+\* RMRcvAbortMsg(rm) -> NoCommittedRM
+\* 
+
+\* RMRcvCommitMsg(rm) -> NoAbortedRM \/ NoCommittedRM
+\* RMRcvCommitMsg(rm) -> NoAbortedRM
+\* RMRcvCommitMsg(rm) -> ExistCommitMsg -> NoAbortMsg
+
+
+\* argument: 
+\* argument: NoCommitMsg \/ NoAbortMsg
+\* argument: NoAbortMsg \/ NoCommittedRM
+\* argument: NoCommitMsg \/ NoAbortedRM
+
+Argument2 == NoCommitMsg \/ NoAbortedRM
+
+LEMMA Lemma2 == Spec => []Argument2
+
+Argument1 == NoAbortedRM \/ NoCommittedRM
+
+LEMMA Lemma1 == Spec => []Argument1
+<1> SUFFICES ASSUME Init /\ [][Next]_vars PROVE []Argument1 BY DEF Spec
+<1>b []TypeInvariant BY TypeProperty DEF Spec
+<1>c RMStateTypeInvariant /\ RMStateTypeInvariant' BY <1>b, PTL DEF TypeInvariant
+<1>d rmState \in [RM -> RMState] /\ rmState' \in [RM -> RMState] BY <1>c DEF RMStateTypeInvariant
+<1>1 Init => Argument1 BY DEF Init, Argument1, NoAbortedRM
+<1>2 Argument1 /\ Next => Argument1'
+  <2>1 Argument1 /\ TMCommit => Argument1'
+    <3>1 NoAbortedRM /\ TMCommit => Argument1' BY DEF NoAbortedRM, TMCommit, Argument1
+    <3>2 NoCommittedRM /\ TMCommit => Argument1' BY DEF NoCommittedRM, TMCommit, Argument1
+    <3> QED BY <3>1, <3>2 DEF Argument1
+  <2>2 Argument1 /\ TMAbort => Argument1'
+    <3>1 NoAbortedRM /\ TMAbort => Argument1' BY DEF NoAbortedRM, TMAbort, Argument1
+    <3>2 NoCommittedRM /\ TMAbort => Argument1' BY DEF NoCommittedRM, TMAbort, Argument1
+    <3> QED BY <3>1, <3>2 DEF Argument1
+  <2>3 Argument1 /\ ChooseRMOp => Argument1'
+    <3> SUFFICES ASSUME Argument1 /\ ChooseRMOp PROVE Argument1' OBVIOUS
+    <3> PICK rm \in RM: RMOp(rm) BY DEF ChooseRMOp
+    <3>1 TMRcvPrepared(rm) => Argument1' BY DEF TMRcvPrepared, Argument1, NoAbortedRM, NoCommittedRM
+    <3>2 RMPrepare(rm) => Argument1'
+      <4> SUFFICES ASSUME RMPrepare(rm) PROVE Argument1' OBVIOUS
+      <4>a rmState' = [rmState EXCEPT ![rm] = "prepared"] BY DEF RMPrepare
+      <4>b rmState'[rm] = "prepared" BY <1>d, <4>a
+      <4>1 NoAbortedRM => NoAbortedRM'
+        <5> SUFFICES ASSUME NoAbortedRM PROVE \A rm2 \in RM: rmState'[rm2] # "aborted" BY DEF NoAbortedRM
+        <5> TAKE rm2 \in RM
+        <5>1 rm2 = rm => rmState'[rm2] # "aborted" BY <4>b
+        <5>2 rm2 # rm => rmState'[rm2] # "aborted"
+          <6> SUFFICES ASSUME rm2 # rm PROVE rmState'[rm2] # "aborted" OBVIOUS
+          <6>a rmState'[rm2] = rmState[rm2] BY <1>d, <4>a
+          <6>b @ # "aborted" BY <4>a DEF NoAbortedRM, Argument1
+          <6> QED BY <6>a, <6>b
+        <5> QED BY <5>1, <5>2
+      <4>2 NoCommittedRM => NoCommittedRM'
+        <5> SUFFICES ASSUME NoCommittedRM PROVE \A rm2 \in RM: rmState'[rm2] # "committed" BY DEF NoCommittedRM
+        <5> TAKE rm2 \in RM
+        <5>1 rm2 = rm => rmState'[rm2] # "committed" BY <4>b
+        <5>2 rm2 # rm => rmState'[rm2] # "committed"
+          <6> SUFFICES ASSUME rm2 # rm PROVE rmState'[rm2] # "committed" OBVIOUS
+          <6>a rmState'[rm2] = rmState[rm2] BY <1>d, <4>a
+          <6>b @ # "committed" BY <4>a DEF NoCommittedRM, Argument1
+          <6> QED BY <6>a, <6>b
+        <5> QED BY <5>1, <5>2
+      <4> QED BY <4>1, <4>2 DEF Argument1
+    <3>3 RMChooseToAbort(rm) => Argument1'
+      <4> SUFFICES ASSUME RMChooseToAbort(rm) PROVE Argument1' OBVIOUS
+      <4>1 NoCommittedRM'
+        <5> QED
+      <4> QED BY <4>1 DEF Argument1
+    <3>4 RMRcvCommitMsg(rm) => Argument1'
+    <3>5 RMRcvAbortMsg(rm) => Argument1'
+    <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5 DEF ChooseRMOp, RMOp
+  <2> QED BY <2>1, <2>2, <2>3 DEF Next
+<1> QED BY <1>1, <1>2, PTL
+
+THEOREM Spec => []Consistency
+<1>a Argument1 <=> Consistency BY DEF ExistCommittedRM, NoAbortedRM, ExistAbortedRM, NoCommittedRM, Consistency, Argument1
+<1> QED BY <1>a, PTL, Lemma1
+
 =============================================================================
 \* Modification History
-\* Last modified Wed Jan 03 16:46:02 CST 2018 by functioner
+\* Last modified Mon Jan 15 11:11:51 CST 2018 by functioner
 \* Created Fri Dec 22 20:05:29 CST 2017 by functioner
